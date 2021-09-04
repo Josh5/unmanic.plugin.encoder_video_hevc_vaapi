@@ -26,7 +26,7 @@ import os
 
 from unmanic.libs.unplugins.settings import PluginSettings
 
-from lib.ffmpeg import StreamMapper, Probe, Parser
+from encoder_video_hevc_vaapi.lib.ffmpeg import StreamMapper, Probe, Parser
 
 # Configure plugin logger
 logger = logging.getLogger("Unmanic.Plugin.encoder_video_hevc_vaapi")
@@ -46,6 +46,8 @@ class Settings(PluginSettings):
                                  "-filter_hw_device vaapi0\n"
                                  "-vf format=nv12|vaapi,hwupload\n",
         "custom_options":        "",
+        "keep_container":        True,
+        "dest_container":        "mkv",
     }
 
     def __init__(self):
@@ -253,7 +255,7 @@ def on_library_management_file_test(data):
     abspath = data.get('path')
 
     # Get file probe
-    probe = Probe(logger)
+    probe = Probe(logger, allowed_mimetypes=['video'])
     if not probe.file(abspath):
         # File probe failed, skip the rest of this test
         return data
@@ -291,14 +293,12 @@ def on_worker_process(data):
     # Default to no FFMPEG command required. This prevents the FFMPEG command from running if it is not required
     data['exec_command'] = []
     data['repeat'] = False
-    # DEPRECIATED: 'exec_ffmpeg' kept for legacy Unmanic versions
-    data['exec_ffmpeg'] = False
 
     # Get the path to the file
     abspath = data.get('file_in')
 
     # Get file probe
-    probe = Probe(logger)
+    probe = Probe(logger, allowed_mimetypes=['video'])
     if not probe.file(abspath):
         # File probe failed, skip the rest of this test
         return data
@@ -314,10 +314,14 @@ def on_worker_process(data):
         mapper.set_input_file(abspath)
 
         # Set the output file
-        # Do not remux the file. Keep the file out in the same container
-        split_file_in = os.path.splitext(abspath)
-        split_file_out = os.path.splitext(data.get('file_out'))
-        mapper.set_output_file("{}{}".format(split_file_out[0], split_file_in[1]))
+        if settings.get_setting('keep_container'):
+            # Do not remux the file. Keep the file out in the same container
+            mapper.set_output_file(data.get('file_out'))
+        else:
+            # Force the remux to the configured container
+            split_file_out = os.path.splitext(data.get('file_out'))
+            mapper.set_output_file("{}.{}".format(split_file_out[0], settings.get_setting('dest_container')))
+            data['file_out'] = "{}.{}".format(split_file_out[0], settings.get_setting('dest_container'))
 
         # Setup required HW acceleration args
         mapper.generate_default_vaapi_args()
@@ -348,8 +352,6 @@ def on_worker_process(data):
         # Apply ffmpeg args to command
         data['exec_command'] = ['ffmpeg']
         data['exec_command'] += ffmpeg_args
-        # DEPRECIATED: 'ffmpeg_args' kept for legacy Unmanic versions
-        data['ffmpeg_args'] = ffmpeg_args
 
         # Set the parser
         parser = Parser(logger)
